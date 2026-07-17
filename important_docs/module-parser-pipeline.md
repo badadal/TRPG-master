@@ -1,9 +1,11 @@
 # Module Parser Pipeline 设计
 
-> 日期：2026-07-15
+> 日期：2026-07-17（对齐 codex/agent-collaboration-aligned 架构）
 > 定位：Module Parser Agent——将非结构化 CoC 模组编译为 Runtime 可执行的 ModuleContent
 > 主责：成员 C
-> 前置：数据模型设计.md / 成员C-模组解析与审查Agent流程架构.md / agent-framework-selection.md
+> 前置：`agent-collaboration-framework/docs/architecture.md` / `contracts/module.py` / `数据模型设计.md`
+>
+> **框架对齐说明**：本文档描述完整目标状态。当前 `contracts/module.py` 中的 Spec 模型是 MVP 简化版——Entity.kind 仅 3 种（npc/object/location）、无 SanTrigger/Pregen/Asset、Rule 使用 ConditionSpec（非 Expr）、Checkpoint.difficulty 不可空。Phase 2 逐步对齐。C 私有模型（ModuleDraft、ValidationReport、ReviewReport）放在 `module/` 目录，不进入 `contracts/`。
 
 ---
 
@@ -498,6 +500,9 @@ Layer 3 通过（+ Human Review）→ 标注"人工认证"，人工批准后发�
 ## 四、中间产物
 
 ```text
+C 私有（module/ 目录）                    B/C 共享（contracts/module.py）
+─────────────────────────                 ──────────────────────────
+
 RawDocument
   │  PDF 路径 + SHA256 + MIME 类型
   │  只读，不修改
@@ -509,35 +514,33 @@ SourceFragment[]
   │  确定性代码生成
   │
   ▼
-ModuleDraft
+ModuleDraft                               ← C 私有。不可被 Runtime 加载。
   │  Parser Pass 输出
   │  携带 source_references（字段→SourceFragment.id）
   │  携带 confidence_notes（字段→置信度）
   │  携带 unresolved_questions
-  │  ⚠️ 不可被 Runtime 加载
   │
   ▼
-ValidationReport
+ValidationReport                          ← C 私有。确定性代码生成。
   │  errors[]: 阻断项（必须修）
   │  warnings[]: 提醒项（可接受）
   │  status: pass | needs_revision | blocked
-  │  确定性代码生成
   │
   ▼
-ReviewReport
+ReviewReport                              ← C 私有。Review Pass（LLM）生成。
   │  errors[]: 阻断项
   │  warnings[]: 提醒项
   │  human_review_checklist[]: 待人工逐条核查
   │  mechanism_abcd_coverage: {A: true, B: false, ...}
-  │  Review Pass（LLM）生成
   │
   ▼
-ModuleContent
-  │  通过全部校验 + 审查 + 人工审批
-  │  版本化、不可变
+ModuleContent                             ← B/C 共享契约（contracts/module.py）
+  │  通过全部校验 + 审查 + 人工审批         Pydantic 校验 + 引用完整性
+  │  版本化、不可变                          B 消费它执行规则
   │  存入 Content Repository
   │  同步冻结 fixtures/evals
 ```
+> 注：`ModuleDraft`、`ValidationReport`、`ReviewReport` 是 C 私有模型，定义在 `module/` 目录中，不进入 `contracts/`。`ModuleContent` 定义在 `contracts/module.py`，是 B/C 共同评审的共享契约。
 
 ---
 
@@ -634,12 +637,13 @@ Human Approval（B/C 逐条复核 + 19-hook 空位检查）
 对应的三个 Issue（按依赖顺序）：
 
 ```text
-Issue 1: 对齐 contracts.py 的 Rule 结构到数据模型.md §5.3
-  → 影响: contracts.py + demo-module.json + test_workflow.py
+Issue 1: 对齐 contracts/module.py 的 RuleSpec 结构到数据模型.md §5.3
+  → 影响: contracts/module.py + fixtures/demo-module.json + tests/
+  → 需 B 共同评审（contracts/module.py 是 B/C 共享契约）
 
 Issue 2: 补齐 demo-module.json 的 A/B/C/D 四类机制覆盖
   → 影响: fixtures/demo-module.json + demo-cases.json + demo-state.json
 
 Issue 3: 建立 Validation 确定性校验流水线（Layer 1+2）
-  → 影响: modules/validation.py + 新增 reference_checker.py
+  → 影响: module/validation.py + 新增 module/reference_checker.py
 ```

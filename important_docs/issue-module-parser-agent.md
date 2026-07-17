@@ -3,7 +3,9 @@
 > 类型：Design Issue（RFC）
 > 里程碑：MS1 · 战略决策与首尾可跑版本
 > 主责：成员 C
-> 日期：2026-07-15
+> 日期：2026-07-17（对齐 codex/agent-collaboration-aligned 架构）
+>
+> **框架对齐说明**：本 Issue 中 `ModuleContent` 对应 `contracts/module.py`（B/C 共享契约，`ContractModel` 使用 `frozen=True` + `tuple`）。C 私有模型（`ModuleDraft`、`ValidationReport`、`ReviewReport`）定义在 `module/` 目录，不进入 `contracts/`。`contracts/module.py` 的修改需 B 共同评审。
 
 ---
 
@@ -158,11 +160,11 @@ Review Pass（LLM）: A/B/C/D 覆盖度、秘密隔离、过度结构化、可�
 
 | 术语 | 定义 | 归属 |
 |------|------|------|
-| **ModuleContent** | 编译后的完整可执行模组数据。包含 scene、entity、checkpoint、win_condition 等所有 Runtime 需要的内容。是 Parser 的最终产物。 | 逻辑层 |
-| **ModulePack** | 模组的发布元数据。包含 title、authors、version、players_min/max、difficulty。存储在数据库中。 | 物理层（DB 表） |
-| **ModuleDraft** | Parser Pass 的原始输出。携带 source_references 和 confidence_notes。⚠️ 不可被 Runtime 加载——未通过 Validation。 | 中间产物 |
-| **ValidationReport** | Validation 阶段的输出。errors 阻断，warnings 提醒。确定性代码生成。 | 中间产物 |
-| **ReviewReport** | Review Pass 的输出。包含 A/B/C/D 覆盖度、human_review_checklist。LLM 生成。 | 中间产物 |
+| **ModuleContent** | 编译后的完整可执行模组数据。定义在 `contracts/module.py`（B/C 共享契约）。B 消费它执行规则。 | B/C 共享 |
+| **ModulePack** | 模组的发布元数据。包含 title、authors、version、players_min/max、difficulty。存储在数据库中。当前无 Pydantic 模型。 | 物理层（DB 表） |
+| **ModuleDraft** | Parser Pass 的原始输出。C 私有，定义在 `module/`。⚠️ 不可被 Runtime 加载。 | C 私有 |
+| **ValidationReport** | Validation 阶段的输出。C 私有，确定性代码生成。 | C 私有 |
+| **ReviewReport** | Review Pass 的输出。C 私有，LLM 生成。 | C 私有 |
 | **Parser Pass** | Module Parser Agent 的第一阶段。LLM 调用，原文 → ModuleDraft。 | Agent 内部阶段 |
 | **Review Pass** | Module Parser Agent 的第二阶段。LLM 调用，ModuleDraft + 原文 → ReviewReport。 | Agent 内部阶段 |
 | **Rule** | `(hook, when, then, mode, priority)` 五元组。只能挂在 `Entity.rules` 或 `World.world_rules` 上。不存在顶层 Rule。 | 数据模型 |
@@ -171,15 +173,17 @@ Review Pass（LLM）: A/B/C/D 覆盖度、秘密隔离、过度结构化、可�
 ### 6.2 ModuleContent 结构
 
 ```python
+# contracts/module.py — B/C 共享契约。frozen=True，tuple 不可变。
 class ModuleContent(ContractModel):
-    module_id: str          # 唯一标识
-    version: str            # 语义版本
+    module_id: str
+    version: str
     world_ref: str          # → World.id（如 "coc-7e"）
-    scenes: list[Scene]
-    entities: list[Entity]
-    checkpoints: list[Checkpoint]
-    win_conditions: list[WinCondition]
-    # 注意：没有顶层 rules。Rule 挂在 Entity.rules 上。
+    scenes: tuple[SceneSpec, ...]
+    entities: tuple[EntitySpec, ...]
+    checkpoints: tuple[CheckpointSpec, ...]
+    win_conditions: tuple[WinConditionSpec, ...]
+    # 注意：没有顶层 rules。Rule 挂在 EntitySpec.rules 上。
+    # 内含 validate_references() 校验跨引用完整性。
 ```
 
 ### 6.3 中间产物流转
@@ -195,7 +199,7 @@ ValidationReport    Validation 输出。errors[] + warnings[] + status
     ↓
 ReviewReport        Review Pass 输出。errors[] + warnings[] + human_review_checklist[]
     ↓
-ModuleContent       最终产物。版本化，不可变。交付给 Runtime Keeper Agent。
+ModuleContent       最终产物。版本化，不可变。B/C 共享，B 消费执行规则。
 ```
 
 ### 6.4 三个核心接口
@@ -274,12 +278,11 @@ uv run agent-collab-parse --input module.md --review --approve --output module-c
 
 ### Phase 1（当前）
 
-- [ ] `ModuleContent` Schema 冻结，`contracts.py` 中的 `Rule` 结构对齐 `数据模型设计.md §5.3`（Issue 1）
-- [ ] `demo-module.json` 覆盖 A/B/C/D 四类机制，每一项有对应的测试用例（Issue 2）
-- [ ] Validation Layer 1 + Layer 2 可运行：对合法 Demo 返回 pass，对非法输入（重复 ID、悬空引用、顶层 rules）返回明确的 error code
+- [ ] `contracts/module.py` 中的 `RuleSpec` 结构对齐 `数据模型设计.md §5.3`（Issue 1，需 B 共同评审）
+- [ ] `fixtures/demo-module.json` 覆盖 A/B/C/D 四类机制，每一项有对应的测试用例（Issue 2）
+- [ ] `module/validation.py` 扩展为 Validation Layer 1+2：对合法 Demo 返回 pass，对非法输入（重复 ID、悬空引用、顶层 rules）返回明确的 error code（Issue 3）
 - [ ] Review Pass 可对 `demo-module.json` 产出 `ReviewReport`，包含 `human_review_checklist`
 - [ ] 人工审批 checklist 模板确定
-- [ ] 成员 A 可加载 Phase 1 产出的 `ModuleContent` 生成 PlayerView
 - [ ] 成员 B 可基于 Phase 1 产出的 `ModuleContent` 执行 Rule/Checkpoint/WinCondition
 - [ ] 10+ 条 fixture case 覆盖：合法 Demo 通过、非法枚举拒绝、重复 ID 拒绝、悬空引用拒绝、顶层 rules 拒绝
 

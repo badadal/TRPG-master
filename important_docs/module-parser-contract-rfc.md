@@ -1,10 +1,12 @@
 # Module Parser Contract RFC
 
 > 类型：RFC（Request for Comments）
-> 日期：2026-07-15
+> 日期：2026-07-17（对齐 codex/agent-collaboration-aligned 架构）
 > 定位：Module Parser Agent 的 Stage IO Contract 与 ModuleContent 数据契约
-> 消费者：成员 A（Runtime Keeper Agent）、成员 B（确定性引擎）
+> 消费者：成员 B（确定性引擎，消费 ModuleContent）
 > 生产者：成员 C（Module Parser Agent）
+>
+> **框架对齐说明**：本文档定义的 Stage IO 对象中，`ModuleContent` 实现在 `contracts/module.py`（B/C 共享契约，`ContractModel` 使用 `frozen=True` + `tuple`）。`ModuleDraft`、`ValidationReport`、`ReviewReport` 是 C 私有模型，应定义在 `module/` 目录，不进入 `contracts/`。Part 2 的字段定义包含 Phase 2 目标字段（如 SanTrigger、Pregen、Asset、public_persona、stats、is_ending），这些在 `contracts/module.py` 中尚未实现。
 
 ---
 
@@ -207,21 +209,25 @@
 ### 1.7 Stage IO 总览
 
 ```text
+C 私有（module/）                        B/C 共享（contracts/module.py）
+─────────────────────────                ─────────────────────────────
+
 RawDocument                   外部输入，只读
     ↓ Preprocess
-SourceFragment[]              Parser 内部对象，Parse 完成后可丢弃
+SourceFragment[]              C 私有，Parse 完成后可丢弃
     ↓ Parser Pass
-ModuleDraft                   Parser 内部对象，不可进入 Runtime
+ModuleDraft                   C 私有，不可进入 Runtime
     ↓ Validation
-ValidationReport              Parser 内部对象，不可进入 Runtime
+ValidationReport              C 私有，确定性代码生成
     ↓ Review Pass
-ReviewReport                  Parser 内部对象，不可进入 Runtime
+ReviewReport                  C 私有，LLM 生成
     ↓ Human Approval
 Human Approval Decision       审批记录，持久化
     ↓ Publish
 ApprovedModule                对外交付物，持久化，Runtime 可加载
     ↓
-ModuleContent                 被 Runtime Keeper Agent 消费
+ModuleContent                 B/C 共享契约（contracts/module.py）
+                              被 B 消费执行规则
 ```
 
 ---
@@ -632,12 +638,14 @@ Room 创建时（SessionManager.create_room）：
 
 ## Open Questions
 
-1. **ModulePack 归属**：`ModulePack` 的 Pydantic Model 应该在 contracts.py 中定义，还是作为数据库层的 ORM Model？当前 contracts.py 只有 `ModuleContent`，缺失 `ModulePack`。Parser Pass 提取的 title、authors、players_min/max 目前没有对应的 Pydantic Model 可以承载。
+1. **ModulePack 归属**：`ModulePack` 的 Pydantic Model 应在 `contracts/module.py` 中定义，还是作为数据库层的 ORM Model？当前仅 `ModuleContent` 存在，缺失 `ModulePack`。Parser Pass 提取的 title、authors、players_min/max 目前无 Pydantic Model 承载。
 
-2. **Entity.public_persona 和 Entity.stats**：这两个字段在当前 contracts.py 中缺失。是刻意在 MVP 阶段省略（因为 Demo 中 NPC 没有属性块，表面人设写进 content 足够），还是应该补充？
+2. **Entity.public_persona 和 Entity.stats**：`contracts/module.py` 的 `EntitySpec` 中缺失。Phase 1 Demo NPC 无属性块可接受，Phase 2 需补充。
 
-3. **SanTrigger 模型缺失**：contracts.py 中完全没有 SanTrigger 的 Pydantic 定义。Phase 1（书房 Demo）没有 SAN 检定，但 Phase 2 任何一个真实模组都需要。何时补充？
+3. **SanTrigger、Pregen、Asset 模型缺失**：`contracts/module.py` 中完全无对应 Spec 定义。Phase 2 真实模组导入时需要补上。
 
-4. **Checkpoint.difficulty 的可空性**：当前 contracts.py 的 difficulty 不可空（`Literal["regular", "hard", "extreme"]`）。数据模型明确要求可空——蛙蛙村说服信使的难度由玩家扮演质量决定。何时修正？
+4. **CheckpointSpec.difficulty 的可空性**：当前 `contracts/module.py` 的 difficulty 不可空（`Literal["regular", "hard", "extreme"]`）。数据模型要求可空。需 B 共同确认。
 
-5. **WinCondition.when vs Expr**：当前 contracts.py 的 WinCondition.when 是 `Condition {path, equals}`，数据模型要求 `Expr`（完整布尔表达式）。`document.obtained == true && cabinet.opened == true` 这样的复合条件无法用 Condition 表达。是否需要等真实模组导入时才修正？
+5. **RuleSpec.when / WinConditionSpec.when**：当前为 `ConditionSpec {path, equals}`。数据模型要求 `Expr`（完整布尔表达式）。Issue 1 后需 B 共同评审升级路径。
+
+6. **contracts/module.py 修改审批**：`architecture.md` 规定 `contracts/module.py` 是 B/C 共同评审区——C 的任何字段修改需 B 审批。
